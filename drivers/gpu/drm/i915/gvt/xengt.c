@@ -34,6 +34,7 @@
 #include <linux/freezer.h>
 #include <linux/wait.h>
 #include <linux/sched.h>
+#include <linux/miscdevice.h>
 
 #include <asm/xen/hypercall.h>
 #include <asm/xen/page.h>
@@ -269,6 +270,100 @@ static struct intel_vgpu *vgpu_from_vm_id(int vm_id)
 	}
 	return NULL;
 }
+
+static long
+gvtg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	struct intel_vgpu *vgpu = filp->private_data;
+	unsigned long minsz;
+
+  if (cmd == VFIO_DEVICE_QUERY_GFX_PLANE) {
+		struct vfio_device_gfx_plane_info dmabuf;
+		int ret = 0;
+
+		minsz = offsetofend(struct vfio_device_gfx_plane_info,
+                        dmabuf_id);
+		if (copy_from_user(&dmabuf, (void __user *)arg, minsz))
+			return -EFAULT;
+		if (dmabuf.argsz < minsz)
+			return -EINVAL;
+
+		ret = intel_gvt_ops->vgpu_query_plane(vgpu, &dmabuf);
+		if (ret != 0)
+			return ret;
+
+		return copy_to_user((void __user *)arg, &dmabuf, minsz) ?
+      -EFAULT : 0;
+	} else if (cmd == VFIO_DEVICE_GET_GFX_DMABUF) {
+		__u32 dmabuf_id;
+		__s32 dmabuf_fd;
+
+		if (get_user(dmabuf_id, (__u32 __user *)arg))
+			return -EFAULT;
+
+		dmabuf_fd = intel_gvt_ops->vgpu_get_dmabuf(vgpu, dmabuf_id);
+		return dmabuf_fd;
+
+	}
+
+  return 0;
+}
+
+static int
+gvtg_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	unsigned int index;
+	u64 virtaddr;
+	unsigned long req_size, pgoff = 0;
+	pgprot_t pg_prot;
+	struct intel_vgpu *vgpu = filp->private_data;
+
+	index = vma->vm_pgoff >> (40 - PAGE_SHIFT);
+	if (index >= VFIO_PCI_ROM_REGION_INDEX)
+		return -EINVAL;
+
+	if (vma->vm_end < vma->vm_start)
+		return -EINVAL;
+	if ((vma->vm_flags & VM_SHARED) == 0)
+		return -EINVAL;
+	if (index != VFIO_PCI_BAR2_REGION_INDEX)
+		return -EINVAL;
+
+	pg_prot = vma->vm_page_prot;
+	virtaddr = vma->vm_start;
+	req_size = vma->vm_end - vma->vm_start;
+	pgoff = vgpu_aperture_pa_base(vgpu) >> PAGE_SHIFT;
+
+	return remap_pfn_range(vma, virtaddr, pgoff, req_size, pg_prot);
+}
+
+static int gvtg_open(struct inode *inode, struct file *filp)
+{
+  struct intel_vgpu *vgpu;
+  domid_t vm_id;
+  const char *driver_name = filp->f_path.dentry->d_iname;
+
+  sscanf(driver_name, "/dev/gvgt-%hi", &vm_id);
+
+  vgpu = vgpu_from_vm_id(vm_id);
+  filp->private_data = vgpu;
+
+  return 0;
+}
+
+static int gvtg_release(struct inode *i, struct file *f)
+{
+  return 0;
+}
+
+static const struct file_operations gvtg_fops =
+{
+  .owner = THIS_MODULE,
+  .open = gvtg_open,
+  .release = gvtg_release,
+  .unlocked_ioctl = gvtg_ioctl,
+  .mmap = gvtg_mmap,
+};
 
 static int xengt_sysfs_del_instance(struct xengt_hvm_params *vp)
 {
@@ -1490,6 +1585,13 @@ void xengt_instance_destroy(struct intel_vgpu *vgpu)
 	if (info->dev_state)
 		vfree(info->dev_state);
 
+  if (info->device) {
+    misc_deregister(info->device);
+
+    vfree(info->device->name);
+    vfree(info->device);
+  }
+
 out1:
 	xengt_logd_destroy(info);
 	xengt_vmem_destroy(vgpu);
@@ -1506,6 +1608,7 @@ struct intel_vgpu *xengt_instance_create(domid_t vm_id,
 {
 	struct xengt_hvm_dev *info;
 	struct intel_vgpu *vgpu;
+  struct miscdevice *gvtg_dev;
 	int vcpu, irq, rc = 0;
 	struct task_struct *thread;
 
@@ -1521,6 +1624,26 @@ struct intel_vgpu *xengt_instance_create(domid_t vm_id,
 		goto err;
 
 	info->vm_id = vm_id;
+
+  gvtg_dev = vzalloc(sizeof(struct miscdevice));
+  if(!gvtg_dev) {
+    goto err;
+  }
+
+  gvtg_dev->minor = MISC_DYNAMIC_MINOR;
+  gvtg_dev->name = vzalloc(16);
+  if(!gvtg_dev->name) {
+    goto err;
+  }
+
+  snprintf((char *)gvtg_dev->name, 16, "gvtg-%hi", vm_id);
+  gvtg_dev->fops = &gvtg_fops;
+  if(!misc_register(gvtg_dev)) {
+    goto err;
+  }
+
+  info->device = gvtg_dev;
+
 	info->vgpu = vgpu;
 	vgpu->handle = (unsigned long)info;
 	info->iopage_vma = xen_hvm_map_iopage(info);
