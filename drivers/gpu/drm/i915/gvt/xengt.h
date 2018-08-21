@@ -22,6 +22,7 @@ struct xengt_hvm_dev {
 	domid_t vm_id;
 	struct kobject kobj;
 	struct intel_vgpu *vgpu;
+	struct miscdevice *device;
 	int on_destroy;
 
 	/* iopage_vma->addr is just iopage. We need iopage_vma on VM destroy */
