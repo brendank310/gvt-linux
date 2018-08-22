@@ -1612,33 +1612,43 @@ struct intel_vgpu *xengt_instance_create(domid_t vm_id,
 	int vcpu, irq, rc = 0;
 	struct task_struct *thread;
 
-	if (!intel_gvt_ops || !xengt_priv.gvt)
-		return NULL;
+	if (!intel_gvt_ops || !xengt_priv.gvt) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
+    return NULL;
+  }
 
 	vgpu = intel_gvt_ops->vgpu_create(xengt_priv.gvt, vgpu_type);
-	if (IS_ERR(vgpu))
-		return NULL;
+	if (IS_ERR(vgpu)) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
+    return NULL;
+  }
+
 	intel_gvt_ops->vgpu_activate(vgpu);
 	info = kzalloc(sizeof(struct xengt_hvm_dev), GFP_KERNEL);
-	if (info == NULL)
-		goto err;
+	if (info == NULL) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
+    goto err;
+  }
 
 	info->vm_id = vm_id;
 
   gvtg_dev = vzalloc(sizeof(struct miscdevice));
-  if(!gvtg_dev) {
+  if(!gvtg_dev)  {
+    gvt_err("%s: %d\n", __func__, __LINE__);
     goto err;
   }
 
   gvtg_dev->minor = MISC_DYNAMIC_MINOR;
   gvtg_dev->name = vzalloc(16);
   if(!gvtg_dev->name) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
     goto err;
   }
 
   snprintf((char *)gvtg_dev->name, 16, "gvtg-%hi", vm_id);
   gvtg_dev->fops = &gvtg_fops;
   if(!misc_register(gvtg_dev)) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
     goto err;
   }
 
@@ -1657,6 +1667,7 @@ struct intel_vgpu *xengt_instance_create(domid_t vm_id,
 	info->nr_vcpu = xen_get_nr_vcpu(vm_id);
 	info->evtchn_irq = kmalloc(info->nr_vcpu * sizeof(int), GFP_KERNEL);
 	if (info->evtchn_irq == NULL) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
 		rc = -ENOMEM;
 		goto err;
 	}
@@ -1665,22 +1676,29 @@ struct intel_vgpu *xengt_instance_create(domid_t vm_id,
 
 	info->dev_state = vzalloc(MIGRATION_IMG_MAX_SIZE);
 	if (info->dev_state == NULL) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
 		rc = -ENOMEM;
 		goto err;
 	}
 
 	rc = xen_hvm_map_pcidev_to_ioreq_server(info,
 			PCI_BDF2(0, 0x10));//FIXME hack the dev bdf
-	if (rc < 0)
-		goto err;
+	if (rc < 0) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
+    goto err;
+  }
 
 	rc = hvm_claim_ioreq_server_type(info, 1);
-	if (rc < 0)
-		goto err;
+	if (rc < 0) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
+    goto err;
+  }
 
 	rc = xen_hvm_toggle_iorequest_server(info, 1);
-	if (rc < 0)
-		goto err;
+  if (rc < 0) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
+    goto err;
+  }
 
 	for (vcpu = 0; vcpu < info->nr_vcpu; vcpu++) {
 		irq = bind_interdomain_evtchn_to_irqhandler(vm_id,
@@ -1689,7 +1707,7 @@ struct intel_vgpu *xengt_instance_create(domid_t vm_id,
 				"xengt", vgpu);
 		if (irq < 0) {
 			rc = irq;
-			gvt_err("Failed to bind event channle: %d\n", rc);
+			gvt_err("Failed to bind event channel: %d\n", rc);
 			goto err;
 		}
 		info->evtchn_irq[vcpu] = irq;
@@ -1697,8 +1715,10 @@ struct intel_vgpu *xengt_instance_create(domid_t vm_id,
 
 	thread = kthread_run(xengt_emulation_thread, vgpu,
 			"xengt_emulation:%d", vm_id);
-	if (IS_ERR(thread))
-		goto err;
+	if (IS_ERR(thread)) {
+    gvt_err("%s: %d\n", __func__, __LINE__);
+    goto err;
+  }
 	info->emulation_thread = thread;
 
 	return vgpu;
