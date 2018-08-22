@@ -1647,7 +1647,7 @@ struct intel_vgpu *xengt_instance_create(domid_t vm_id,
 
   snprintf((char *)gvtg_dev->name, 16, "gvtg-%hi", vm_id);
   gvtg_dev->fops = &gvtg_fops;
-  if(!misc_register(gvtg_dev)) {
+  if(misc_register(gvtg_dev) != 0) {
     gvt_err("%s: %d\n", __func__, __LINE__);
     goto err;
   }
