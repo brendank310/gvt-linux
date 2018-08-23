@@ -66,7 +66,7 @@ static int vgpu_gem_get_pages(
 
 	for_each_sg(st->sgl, sg, page_num, i) {
                 gvt_vgpu_err("ggtt.gsm: %p -- gtt_entries: %p\n", (gen8_pte_t __iomem *)dev_priv->ggtt.gsm, gtt_entries);
-                gvt_vgpu_err("[%d] -- GTT_ENTRY_PTR: pte addr: [%p]%p\n", i, &gtt_entries[i], gtt_entries[i]);
+                gvt_vgpu_err("[%d] -- GTT_ENTRY_PTR: pte addr: [%p] - %p\n", i, &gtt_entries[i], gtt_entries[i]);
 		sg->offset = 0;
 		sg->length = PAGE_SIZE;
 		sg_dma_address(sg) =
