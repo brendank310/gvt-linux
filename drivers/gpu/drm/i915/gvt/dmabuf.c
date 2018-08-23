@@ -62,7 +62,9 @@ static int vgpu_gem_get_pages(
 	}
 	gtt_entries = (gen8_pte_t __iomem *)dev_priv->ggtt.gsm +
 		(fb_info->start >> PAGE_SHIFT);
+  gvt_vgpu_err("ggtt.gsm: %p -- gtt_entries: %p\n", (gen8_pte_t __iomem *)dev_priv->ggtt.gsm, gtt_entries);
 	for_each_sg(st->sgl, sg, fb_info->size, i) {
+    gvt_vgpu_err("[%d] -- GTT_ENTRY_PTR: %p\n", i, &gtt_entries[i]);
 		sg->offset = 0;
 		sg->length = PAGE_SIZE;
 		sg_dma_address(sg) =
