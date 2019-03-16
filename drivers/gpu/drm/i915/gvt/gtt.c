@@ -32,7 +32,8 @@
  *    Bing Niu <bing.niu@intel.com>
  *
  */
-
+#include <linux/types.h>
+#include <xen/xen.h>
 #include "i915_drv.h"
 #include "gvt.h"
 #include "i915_pvinfo.h"
@@ -65,16 +66,15 @@ bool intel_gvt_ggtt_validate_range(struct intel_vgpu *vgpu, u64 addr, u32 size)
 /* translate a guest gmadr to host gmadr */
 int intel_gvt_ggtt_gmadr_g2h(struct intel_vgpu *vgpu, u64 g_addr, u64 *h_addr)
 {
-	if (WARN(!vgpu_gmadr_is_valid(vgpu, g_addr),
-		 "invalid guest gmadr %llx\n", g_addr))
+	if (!vgpu_gmadr_is_valid(vgpu, g_addr))
 		return -EACCES;
 
 	if (vgpu_gmadr_is_aperture(vgpu, g_addr))
 		*h_addr = vgpu_aperture_gmadr_base(vgpu)
-			  + (g_addr - vgpu_aperture_offset(vgpu));
+			  + (g_addr - vgpu_guest_aperture_gmadr_base(vgpu));
 	else
 		*h_addr = vgpu_hidden_gmadr_base(vgpu)
-			  + (g_addr - vgpu_hidden_offset(vgpu));
+			  + (g_addr - vgpu_guest_hidden_gmadr_base(vgpu));
 	return 0;
 }
 
@@ -86,10 +86,10 @@ int intel_gvt_ggtt_gmadr_h2g(struct intel_vgpu *vgpu, u64 h_addr, u64 *g_addr)
 		return -EACCES;
 
 	if (gvt_gmadr_is_aperture(vgpu->gvt, h_addr))
-		*g_addr = vgpu_aperture_gmadr_base(vgpu)
+		*g_addr = vgpu_guest_aperture_gmadr_base(vgpu)
 			+ (h_addr - gvt_aperture_gmadr_base(vgpu->gvt));
 	else
-		*g_addr = vgpu_hidden_gmadr_base(vgpu)
+		*g_addr = vgpu_guest_hidden_gmadr_base(vgpu)
 			+ (h_addr - gvt_hidden_gmadr_base(vgpu->gvt));
 	return 0;
 }
@@ -590,7 +590,7 @@ static inline void ppgtt_set_shadow_root_entry(struct intel_vgpu_mm *mm,
 	_ppgtt_set_root_entry(mm, entry, index, false);
 }
 
-static void ggtt_get_guest_entry(struct intel_vgpu_mm *mm,
+void ggtt_get_guest_entry(struct intel_vgpu_mm *mm,
 		struct intel_gvt_gtt_entry *entry, unsigned long index)
 {
 	struct intel_gvt_gtt_pte_ops *pte_ops = mm->vgpu->gvt->gtt.pte_ops;
@@ -1692,6 +1692,10 @@ static int ppgtt_handle_guest_write_page_table_bytes(
 
 	index = (pa & (PAGE_SIZE - 1)) >> info->gtt_entry_size_shift;
 
+	if (xen_initial_domain())
+		/* Set guest ppgtt entry.Optional for KVMGT,but MUST for XENGT*/
+		intel_gvt_hypervisor_write_gpa(vgpu, pa, p_data, bytes);
+
 	ppgtt_get_guest_entry(spt, &we, index);
 
 	/*
@@ -2171,7 +2175,8 @@ static int emulate_ggtt_mmio_write(struct intel_vgpu *vgpu, unsigned int off,
 	struct intel_vgpu_mm *ggtt_mm = vgpu->gtt.ggtt_mm;
 	struct intel_gvt_gtt_pte_ops *ops = gvt->gtt.pte_ops;
 	unsigned long g_gtt_index = off >> info->gtt_entry_size_shift;
-	unsigned long gma, gfn;
+	unsigned long gfn;
+	unsigned long h_gtt_index;
 	struct intel_gvt_gtt_entry e, m;
 	dma_addr_t dma_addr;
 	int ret;
@@ -2181,10 +2186,8 @@ static int emulate_ggtt_mmio_write(struct intel_vgpu *vgpu, unsigned int off,
 	if (bytes != 4 && bytes != 8)
 		return -EINVAL;
 
-	gma = g_gtt_index << I915_GTT_PAGE_SHIFT;
-
 	/* the VM may configure the whole GM space when ballooning is used */
-	if (!vgpu_gmadr_is_valid(vgpu, gma))
+	if (intel_gvt_ggtt_index_g2h(vgpu, g_gtt_index, &h_gtt_index))
 		return 0;
 
 	e.type = GTT_TYPE_GGTT_PTE;
@@ -2271,7 +2274,7 @@ out:
 	ggtt_get_host_entry(ggtt_mm, &e, g_gtt_index);
 	ggtt_invalidate_pte(vgpu, &e);
 
-	ggtt_set_host_entry(ggtt_mm, &m, g_gtt_index);
+	ggtt_set_host_entry(ggtt_mm, &m, h_gtt_index);
 	ggtt_invalidate(gvt->dev_priv);
 	return 0;
 }
